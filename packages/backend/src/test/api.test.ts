@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { createServer } from '../server';
 
-const app = createServer();
+const { app } = createServer();
 
 describe('API Health Checks', () => {
   it('GET /health should return 200', async () => {
