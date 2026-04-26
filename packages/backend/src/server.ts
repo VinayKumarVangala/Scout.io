@@ -10,6 +10,9 @@ import { notFound } from './middleware/notFound';
 import { requestLogger } from './middleware/requestLogger';
 import { globalRateLimiter } from './middleware/rateLimiter';
 import apiRouter from './routes/api.routes';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
+import path from 'path';
 
 export function createServer() {
   const app = express();
@@ -44,6 +47,10 @@ export function createServer() {
 
   // API Routes
   app.use('/api', apiRouter);
+
+  // Documentation
+  const swaggerDocument = YAML.load(path.join(__dirname, 'docs/swagger.yaml'));
+  app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
   // Health Checks
   app.get('/health', (req, res) => {
