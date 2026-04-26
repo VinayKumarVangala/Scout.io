@@ -1,6 +1,12 @@
 import React from 'react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Plus, Search, Filter, MoreVertical, Globe, Shield } from 'lucide-react';
+import dynamic from 'next/dynamic';
+
+const ClientStats = dynamic(() => import('@/components/clients/ClientStats').then(mod => mod.ClientStats), {
+  loading: () => <div className="h-32 bg-gray-100 animate-pulse rounded-xl mb-8"></div>,
+  ssr: false
+});
 
 const mockClients = [
   { id: '1', name: 'Acme Corp', domains: ['acme.com'], status: 'active', provider: 'openai', usage: '1.2M tokens' },
@@ -21,6 +27,8 @@ export default function ClientsPage() {
           Add New Client
         </button>
       </div>
+
+      <ClientStats />
 
       <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
         <div className="p-4 border-b flex flex-col sm:flex-row gap-4 justify-between">
