@@ -27,7 +27,7 @@ export const messageSchema = z.object({
 export const proxyRequestSchema = z.object({
   url: z.string().url(),
   method: z.enum(['GET', 'POST', 'PUT', 'DELETE']),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   body: z.any().optional(),
 });
 
