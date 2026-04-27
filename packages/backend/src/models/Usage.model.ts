@@ -3,7 +3,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface UsageDocument extends Document {
   clientId: mongoose.Types.ObjectId;
   provider: string;
-  model: string;
+  llmModel: string;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -13,7 +13,7 @@ export interface UsageDocument extends Document {
 const UsageSchema: Schema = new Schema({
   clientId: { type: Schema.Types.ObjectId, ref: 'Client', required: true },
   provider: { type: String, required: true },
-  model: { type: String, required: true },
+  llmModel: { type: String, required: true },
   promptTokens: { type: Number, default: 0 },
   completionTokens: { type: Number, default: 0 },
   totalTokens: { type: Number, default: 0 },

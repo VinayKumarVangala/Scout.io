@@ -8,7 +8,7 @@ export class JWTService {
     this.secret = process.env.JWT_SECRET || 'fallback-secret-for-dev-only';
   }
 
-  public generateToken(payload: JWTPayload, expiresIn: string = '24h'): string {
+  public generateToken(payload: JWTPayload, expiresIn: any = '24h'): string {
     return jwt.sign(payload, this.secret, { expiresIn });
   }
 

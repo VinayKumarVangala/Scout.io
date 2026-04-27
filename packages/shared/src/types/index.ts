@@ -23,6 +23,12 @@ export interface Client {
   updatedAt: string;
 }
 
+export interface ClientRegistration {
+  name: string;
+  domains: string[];
+  settings: ClientSettings;
+}
+
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
