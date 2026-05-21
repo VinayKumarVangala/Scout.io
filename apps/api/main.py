@@ -14,6 +14,9 @@ from routes.tenant import router as tenant_router
 from routes.upload import router as upload_router
 from routes.chat import router as chat_router
 from routes.retrieval import router as retrieval_router
+from middleware.request_logger import request_logger_middleware
+from middleware.error_handler import http_exception_handler
+from fastapi import HTTPException
 
 # Initialize Settings
 settings = get_settings()
@@ -37,6 +40,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register request logger middleware
+app.middleware("http")(request_logger_middleware)
+
 # Root APIRouter to group v1 routes under /api/v1 prefix
 api_v1_router = APIRouter(prefix="/api/v1")
 
@@ -55,23 +61,8 @@ app.include_router(api_v1_router)
 async def startup_event():
     print(f"Scout.io API started — environment: {settings.ENVIRONMENT}")
 
-# Global exception handler for FastAPI HTTPExceptions
-from fastapi import HTTPException
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    if isinstance(exc.detail, dict):
-        return JSONResponse(status_code=exc.status_code, content=exc.detail)
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "success": False,
-            "error": {
-                "code": "UNAUTHORIZED" if exc.status_code == 401 else "BAD_REQUEST",
-                "message": exc.detail
-            }
-        }
-    )
+# Register global exception handler for FastAPI HTTPExceptions
+app.add_exception_handler(HTTPException, http_exception_handler)
 
 # Global exception handler for unhandled errors
 @app.exception_handler(Exception)
