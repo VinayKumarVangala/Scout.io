@@ -27,7 +27,7 @@ Accounts to create (all free tier):
 ```
 □ Supabase account → get DATABASE_URL
 □ Qdrant Cloud account → get QDRANT_URL + QDRANT_API_KEY
-□ Cloudflare account → create R2 bucket → get R2_ACCESS_KEY + R2_SECRET_KEY + R2_BUCKET + R2_ENDPOINT
+□ Supabase account → also enables Storage (same account as DATABASE_URL) → get SUPABASE_URL + SUPABASE_SERVICE_KEY
 □ OpenAI account → get OPENAI_API_KEY
 □ Render account (for backend deployment later)
 □ Vercel account (for widget deployment later)
@@ -164,7 +164,7 @@ Create apps/api/requirements.txt with these pinned packages:
   qdrant-client==1.9.1
   openai==1.30.1
   sentence-transformers==2.7.0
-  boto3==1.34.110
+  supabase==2.5.0
   pytest==8.2.0
   pytest-asyncio==0.23.6
   black==24.4.2
@@ -177,10 +177,9 @@ Create apps/api/.env.example with these variables (empty values):
   QDRANT_API_KEY=
   QDRANT_COLLECTION=scoutio_knowledge
   OPENAI_API_KEY=
-  R2_ACCESS_KEY=
-  R2_SECRET_KEY=
-  R2_BUCKET=
-  R2_ENDPOINT=
+  SUPABASE_URL=
+  SUPABASE_SERVICE_KEY=
+  SUPABASE_STORAGE_BUCKET=scout-uploads
   ADMIN_SECRET_KEY=
   ENVIRONMENT=development
   LOG_LEVEL=INFO
@@ -306,7 +305,7 @@ Requirements:
 Also create apps/api/config.py:
 - A Settings class using pydantic BaseSettings
 - Fields: DATABASE_URL, QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION, OPENAI_API_KEY,
-          R2_ACCESS_KEY, R2_SECRET_KEY, R2_BUCKET, R2_ENDPOINT,
+          SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_STORAGE_BUCKET (default "scout-uploads"),
           ADMIN_SECRET_KEY, ENVIRONMENT (default "development"), LOG_LEVEL (default "INFO")
 - Expose a get_settings() cached function
 ```
@@ -400,8 +399,8 @@ POST /upload
   Logic (stub the external calls for now):
     1. Validate inputs
     2. Generate a document_id (UUID)
-    3. Save file temporarily to /tmp/{document_id}_{filename}
-    4. Insert record into uploads table with status="uploaded"
+    3. Call storage_service.upload_file() to save to Supabase Storage (see Prompt 1-D-S below)
+    4. Insert record into uploads table with status="uploaded", storage_path from storage_service
     5. Trigger N8N webhook (stub: just log "N8N trigger: {document_id}")
     6. Return: {"success": true, "data": {"document_id": "...", "status": "processing"}}
 
@@ -413,6 +412,95 @@ GET /upload/status/{document_id}
     - Return 404 if not found: {"success": false, "error": {"code": "NOT_FOUND", "message": "Document not found"}}
 
 Create Pydantic schemas in schemas/upload.py
+```
+
+---
+
+## Prompt 1-D-S · Supabase Storage service
+
+> 🤖 AI
+
+```
+Create apps/api/services/storage_service.py — file storage using Supabase Storage for Scout.io.
+This replaces any S3/R2 dependency entirely. No boto3 or AWS SDK needed.
+
+Install dependency (already in requirements.txt): supabase==2.5.0
+
+Implement a StorageService class:
+
+Constructor:
+  - Load SUPABASE_URL and SUPABASE_SERVICE_KEY from settings (config.py)
+  - Load SUPABASE_STORAGE_BUCKET from settings (default: "scout-uploads")
+  - Initialize the Supabase client:
+      from supabase import create_client
+      self.client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+  - self.bucket = SUPABASE_STORAGE_BUCKET
+
+upload_file(file_bytes: bytes, destination_path: str, content_type: str = "text/plain") -> str:
+  - Uploads file_bytes to Supabase Storage at destination_path
+  - destination_path format: "{tenant_id}/{document_id}/{filename}"
+    e.g. "tenant_abc/doc_xyz/faq.md"
+  - Calls: self.client.storage.from_(self.bucket).upload(
+        path=destination_path,
+        file=file_bytes,
+        file_options={"content-type": content_type}
+    )
+  - On success: returns destination_path (used as storage_path in the uploads table)
+  - On error: raises StorageError("Upload failed: {reason}")
+
+download_file(storage_path: str) -> bytes:
+  - Downloads a file from Supabase Storage
+  - Calls: self.client.storage.from_(self.bucket).download(storage_path)
+  - Returns raw bytes
+  - On error: raises StorageError("Download failed: {reason}")
+  - Used by the RAG ingestion pipeline to retrieve the file for parsing
+
+delete_file(storage_path: str) -> None:
+  - Deletes a file from Supabase Storage
+  - Calls: self.client.storage.from_(self.bucket).remove([storage_path])
+  - On error: log a warning but do not raise (best-effort cleanup)
+
+get_content_type(filename: str) -> str:
+  - Returns "text/markdown" for .md files
+  - Returns "text/plain" for .txt files
+  - Returns "application/octet-stream" for anything else
+
+Create StorageError(Exception) in the same file.
+Create a module-level singleton: get_storage_service() -> StorageService (cached with functools.lru_cache)
+
+Also create the Supabase Storage bucket setup instructions as a comment at the top of the file:
+  # SETUP: In Supabase dashboard → Storage → New bucket
+  # Bucket name: scout-uploads
+  # Public: NO (keep private — files served only through signed URLs or service key)
+```
+
+---
+
+## 🛠 MANUAL STEP 1-D-S2 · Create Supabase Storage bucket
+
+```
+1. Go to https://supabase.com → your project → Storage (left sidebar)
+
+2. Click "New bucket"
+   - Name: scout-uploads
+   - Public bucket: OFF (leave unchecked — files must stay private)
+   - Click Create bucket
+
+3. Go to Settings → API
+   - Copy "Project URL" → this is your SUPABASE_URL
+   - Copy "service_role" key (under Project API keys) → this is your SUPABASE_SERVICE_KEY
+   ⚠ The service_role key has full access — never expose it in frontend code or widget
+
+4. Add to apps/api/.env:
+   SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
+   SUPABASE_SERVICE_KEY=eyJhbGci...
+   SUPABASE_STORAGE_BUCKET=scout-uploads
+
+5. Test with a quick Python script:
+   from supabase import create_client
+   client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+   result = client.storage.from_("scout-uploads").list()
+   print(result)  # should print [] (empty bucket)
 ```
 
 ---
@@ -869,17 +957,25 @@ Create services/rag-service/ingestion_pipeline.py — the complete RAG ingestion
 This is the orchestrator that runs when a file is uploaded and N8N triggers processing.
 
 Implement run_ingestion(payload: dict) → IngestionResult:
-  payload keys: tenant_id, document_id, upload_id, file_path, filename, file_type
+  payload keys: tenant_id, document_id, upload_id, storage_path, filename, file_type
 
   Steps:
-  1. Parse document using DocumentParser
+  1. Download raw file bytes from Supabase Storage:
+     - Import get_storage_service from apps/api/services/storage_service
+     - file_bytes = storage_service.download_file(storage_path)
+     - Write bytes to a temp file: /tmp/{document_id}_{filename}
+     - Pass the temp path to DocumentParser
+     - Delete the temp file after parsing (always — use try/finally)
+     → On download failure: raise IngestionError("File download failed: {reason}")
+
+  2. Parse the temp file using DocumentParser
      → On failure: raise IngestionError("Parse failed: {reason}")
 
-  2. Chunk the parsed text using RecursiveChunker(chunk_size=800, chunk_overlap=150)
-     → Expect 1–200 chunks; if 0 chunks, raise IngestionError("No content extracted")
+  3. Chunk the parsed text using RecursiveChunker(chunk_size=800, chunk_overlap=150)
+     → Expect 1-200 chunks; if 0 chunks, raise IngestionError("No content extracted")
 
-  3. Build metadata for each chunk:
-     payload = {
+  4. Build metadata for each chunk:
+     chunk_payload = {
        "tenant_id": tenant_id,
        "document_id": document_id,
        "chunk_id": str(uuid4()),
@@ -888,16 +984,16 @@ Implement run_ingestion(payload: dict) → IngestionResult:
        "content": chunk.content
      }
 
-  4. Generate embeddings in batch using EmbeddingService.embed_batch()
+  5. Generate embeddings in batch using EmbeddingService.embed_batch()
      → Embed all chunk content strings in one call
 
-  5. Upsert vectors to Qdrant using vector_store.upsert_vectors()
+  6. Upsert vectors to Qdrant using vector_store.upsert_vectors()
      → collection_name from settings.QDRANT_COLLECTION
 
-  6. Update upload status to "indexed" in PostgreSQL
+  7. Update upload status to "indexed" in PostgreSQL
      → Call upload_repository.update_upload_status()
 
-  7. Return IngestionResult(
+  8. Return IngestionResult(
        document_id=..., chunk_count=..., status="indexed", duration_seconds=...
      )
 
@@ -908,7 +1004,7 @@ Implement run_ingestion(payload: dict) → IngestionResult:
 
 Create IngestionError and IngestionResult as simple dataclasses/exceptions in the same file.
 Add timing using time.time() to track duration.
-Log each step with structured output: {"step": "chunking", "chunk_count": 42, "document_id": "..."}
+Log each step with structured output: {"step": "downloading", "storage_path": "...", "document_id": "..."}
 ```
 
 ---
@@ -1431,7 +1527,7 @@ Nodes to add (in order):
 2. HTTP Request node (call Scout.io ingestion API)
    - Method: POST
    - URL: {{$env.API_BASE_URL}}/api/v1/internal/ingest
-   - Body: { "document_id": "{{$json.document_id}}", "tenant_id": "{{$json.tenant_id}}", "file_path": "{{$json.file_path}}", "filename": "{{$json.filename}}" }
+   - Body: { "document_id": "{{$json.document_id}}", "tenant_id": "{{$json.tenant_id}}", "storage_path": "{{$json.storage_path}}", "filename": "{{$json.filename}}" }
 
 3. IF node (check success)
    - Condition: {{$json.success}} is true
@@ -1463,22 +1559,30 @@ Update apps/api/routes/upload.py to trigger the N8N webhook after upload.
 
 Create apps/api/services/n8n_service.py:
 
-async def trigger_upload_ingestion(document_id: str, tenant_id: str, file_path: str, filename: str) → bool:
+async def trigger_upload_ingestion(document_id: str, tenant_id: str, storage_path: str, filename: str) → bool:
   - Read N8N_UPLOAD_WEBHOOK_URL from environment
   - If URL is not configured, log a warning and return False (do not crash)
   - POST to the webhook URL with payload:
-    { "document_id": "...", "tenant_id": "...", "file_path": "...", "filename": "..." }
+    { "document_id": "...", "tenant_id": "...", "storage_path": "...", "filename": "..." }
   - Headers: Basic auth using N8N_WEBHOOK_USER and N8N_WEBHOOK_PASS from env
   - Timeout: 5 seconds
   - On success (2xx): return True
   - On any error: log {"event": "n8n_trigger_failed", "error": "..."} and return False
   - NEVER let this function raise an exception — the upload succeeds even if N8N trigger fails
 
-Update POST /upload:
-  After inserting the upload record:
-  - Call trigger_upload_ingestion() using asyncio if needed
-  - Log whether trigger succeeded or not
-  - Always return success to the client regardless of trigger result
+Update POST /upload — full revised logic:
+  1. Validate file (type + size)
+  2. Read file bytes: file_bytes = await file.read()
+  3. Build storage destination path: "{tenant_id}/{document_id}/{filename}"
+  4. Call storage_service.upload_file(file_bytes, destination_path, content_type)
+     → storage_path = returned destination_path
+     → On StorageError: return 500 with INTERNAL_SERVER_ERROR
+  5. Insert upload record into DB with storage_path (not a local /tmp path)
+  6. Call trigger_upload_ingestion(document_id, tenant_id, storage_path, filename)
+  7. Log whether N8N trigger succeeded or not
+  8. Always return success to the client regardless of trigger result
+
+Import get_storage_service from services.storage_service at the top of upload.py.
 
 Add to .env.example:
   N8N_UPLOAD_WEBHOOK_URL=
@@ -1754,7 +1858,9 @@ Wire metrics.increment() calls into:
    QDRANT_URL = (your Qdrant Cloud URL)
    QDRANT_API_KEY = (your key)
    OPENAI_API_KEY = (your key)
-   R2_ACCESS_KEY, R2_SECRET_KEY, R2_BUCKET, R2_ENDPOINT
+   SUPABASE_URL = (your Supabase project URL — same as DATABASE_URL project)
+   SUPABASE_SERVICE_KEY = (from Supabase → Settings → API → service_role key)
+   SUPABASE_STORAGE_BUCKET = scout-uploads
    ADMIN_SECRET_KEY = (generate a strong random string)
    ENVIRONMENT = production
    LOG_LEVEL = INFO
@@ -1895,7 +2001,7 @@ Use a pytest fixture create_test_tenant() that:
 PRE-START
   □ Install Node.js, Python, Docker, pnpm
   □ Create GitHub repo
-  □ Create accounts: Supabase, Qdrant Cloud, Cloudflare, OpenAI, Render, Vercel
+  □ Create accounts: Supabase (covers DB + Storage), Qdrant Cloud, OpenAI, Render, Vercel
   □ Gather all API keys and credentials
 
 PHASE 0
